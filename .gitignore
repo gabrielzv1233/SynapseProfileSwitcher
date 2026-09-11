@@ -6,3 +6,4 @@ data/cached_icons/
 dist/
 build/
 *.spec
+*.log
