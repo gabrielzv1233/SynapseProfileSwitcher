@@ -50,6 +50,11 @@ TILE_RADIUS = 8
 CONTROL_RADIUS = 8
 DEFAULT_WINDOW_WIDTH = 840
 DEFAULT_WINDOW_HEIGHT = 576
+SAVE_BUTTON_STYLE = (
+    f"QPushButton {{ background: #262626; color: white; border: 1px solid #3d3d3d; border-radius: {CONTROL_RADIUS}px; padding: 6px 12px; }} "
+    "QPushButton:hover { background: #303030; border-color: #505050; } "
+    "QPushButton:pressed { background: #202020; }"
+)
 _LOG = get_logger("ui")
 
 
@@ -246,6 +251,7 @@ class ModifyDialog(QDialog):
         buttons.addStretch()
         cancel = QPushButton("Cancel")
         save = QPushButton("Save")
+        save.setStyleSheet(SAVE_BUTTON_STYLE)
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self.accept)
         buttons.addWidget(cancel)
@@ -322,6 +328,7 @@ class SettingsDialog(QDialog):
         form.addRow("Process matching", self.subprocess)
         layout.addLayout(form)
         save = QPushButton("Save")
+        save.setStyleSheet(SAVE_BUTTON_STYLE)
         save.clicked.connect(self.accept)
         layout.addWidget(save)
 
@@ -351,9 +358,6 @@ class MainWindow(QMainWindow):
             f"QMainWindow, QDialog {{ background: #171717; color: white; }} "
             "QLabel, QCheckBox { color: white; } "
             "QScrollArea { border: 0; background: #171717; } "
-            f"QPushButton {{ background: #262626; color: white; border: 1px solid #3d3d3d; border-radius: {CONTROL_RADIUS}px; padding: 6px 12px; }} "
-            "QPushButton:hover { background: #303030; border-color: #505050; } "
-            "QPushButton:pressed { background: #202020; } "
             f"QLineEdit, QListWidget {{ background: #202020; color: white; border: 1px solid #3d3d3d; border-radius: {CONTROL_RADIUS}px; padding: 5px 8px; }} "
             "QLineEdit:hover, QListWidget:hover { border-color: #505050; } "
             f"QMenu {{ background: #202020; color: white; border: 1px solid #3d3d3d; border-radius: {CONTROL_RADIUS}px; padding: 4px; }} "
