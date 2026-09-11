@@ -71,6 +71,20 @@ If you pulled an update that added SynapseCTRL after already installing the proj
 py -m pip install -e .
 ```
 
+## Nuitka build
+
+Build a single-file Windows executable locally with:
+
+```powershell
+.\build_nuitka.ps1
+```
+
+The script installs the `build` dependency group, builds `dist\SynapseProfileSwitcher.exe`, includes the launcher/game mapping data and SynapseCTRL hook resources, and prints the resulting SHA256 hash.
+
+The executable uses Nuitka's `attach` console mode: normal GUI launches do not create a console, while launches from an existing PowerShell/Terminal session can still receive Ctrl+C.
+
+A manually triggered GitHub Actions workflow is available at **Actions → Build Nuitka EXE → Run workflow**. It uploads `SynapseProfileSwitcher.exe` and a matching `.sha256` file as a workflow artifact.
+
 ## Data location
 
 When running from source, writable state is kept in `./data` next to the project. When packaged, it uses `%LOCALAPPDATA%\\SynapseGameProfiles`.
