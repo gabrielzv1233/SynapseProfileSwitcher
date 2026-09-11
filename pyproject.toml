@@ -10,6 +10,13 @@ dependencies = [
     "SynapseCTRL>=0.3.1",
 ]
 
+[project.optional-dependencies]
+build = [
+    "Nuitka>=4.2.1,<5",
+    "ordered-set>=4.1.0",
+    "zstandard>=0.23.0",
+]
+
 [project.scripts]
 synapse-game-profiles = "synapse_game_profiles.__main__:main"
 
