@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -45,6 +45,9 @@ MIN_COLUMNS = 5
 TARGET_TILE_SIZE = 156
 MIN_TILE_SIZE = 112
 TILE_SPACING = 8
+GRID_PADDING = TILE_SPACING
+TILE_RADIUS = 8
+CONTROL_RADIUS = 8
 DEFAULT_WINDOW_WIDTH = 840
 DEFAULT_WINDOW_HEIGHT = 576
 _LOG = get_logger("ui")
@@ -84,7 +87,7 @@ class Tile(QFrame):
         self.setFixedSize(TARGET_TILE_SIZE, TARGET_TILE_SIZE)
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet(
-            "QFrame { border: 1px solid #3d3d3d; border-radius: 8px; background: #262626; }"
+            f"QFrame {{ border: 1px solid #3d3d3d; border-radius: {TILE_RADIUS}px; background: #262626; }}"
         )
 
         layout = QVBoxLayout(self)
@@ -130,6 +133,12 @@ class Tile(QFrame):
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        clip_rect = self.rect().adjusted(1, 1, -1, -1)
+        clip = QPainterPath()
+        clip.addRoundedRect(clip_rect, TILE_RADIUS - 1, TILE_RADIUS - 1)
+        painter.setClipPath(clip)
+
         scaled = pixmap.scaled(self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
         source_x = max(0, (scaled.width() - self.width()) // 2)
         source_y = max(0, (scaled.height() - self.height()) // 2)
@@ -146,7 +155,11 @@ class FlowLayout(QWidget):
         self.items: list[Tile] = []
         self._relayout_running = False
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.setMinimumWidth(MIN_COLUMNS * MIN_TILE_SIZE + (MIN_COLUMNS - 1) * TILE_SPACING)
+        self.setMinimumWidth(
+            MIN_COLUMNS * MIN_TILE_SIZE
+            + (MIN_COLUMNS - 1) * TILE_SPACING
+            + GRID_PADDING * 2
+        )
 
     def clear(self) -> None:
         for item in self.items:
@@ -172,16 +185,27 @@ class FlowLayout(QWidget):
         self._relayout_running = True
         try:
             width = max(1, self.width())
-            columns = max(MIN_COLUMNS, (width + TILE_SPACING) // (TARGET_TILE_SIZE + TILE_SPACING))
-            tile_size = max(1, (width - (columns - 1) * TILE_SPACING) // columns)
+            available = max(1, width - GRID_PADDING * 2)
+            columns = max(
+                MIN_COLUMNS,
+                (available + TILE_SPACING) // (TARGET_TILE_SIZE + TILE_SPACING),
+            )
+            tile_size = max(
+                1,
+                (available - (columns - 1) * TILE_SPACING) // columns,
+            )
 
             for index, item in enumerate(self.items):
                 row, column = divmod(index, columns)
                 item.set_tile_size(tile_size)
-                item.move(column * (tile_size + TILE_SPACING), row * (tile_size + TILE_SPACING))
+                item.move(
+                    GRID_PADDING + column * (tile_size + TILE_SPACING),
+                    GRID_PADDING + row * (tile_size + TILE_SPACING),
+                )
 
             rows = (len(self.items) + columns - 1) // columns
-            height = rows * tile_size + max(0, rows - 1) * TILE_SPACING
+            content_height = rows * tile_size + max(0, rows - 1) * TILE_SPACING
+            height = content_height + GRID_PADDING * 2
             if self.minimumHeight() != height:
                 self.setMinimumHeight(height)
         finally:
@@ -324,9 +348,18 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(640, 480)
         self._set_default_window_size()
         self.setStyleSheet(
-            "QMainWindow, QDialog { background: #171717; color: white; } "
+            f"QMainWindow, QDialog {{ background: #171717; color: white; }} "
             "QLabel, QCheckBox { color: white; } "
-            "QScrollArea { border: 0; background: #171717; }"
+            "QScrollArea { border: 0; background: #171717; } "
+            f"QPushButton {{ background: #262626; color: white; border: 1px solid #3d3d3d; border-radius: {CONTROL_RADIUS}px; padding: 6px 12px; }} "
+            "QPushButton:hover { background: #303030; border-color: #505050; } "
+            "QPushButton:pressed { background: #202020; } "
+            f"QComboBox, QLineEdit, QListWidget {{ background: #202020; color: white; border: 1px solid #3d3d3d; border-radius: {CONTROL_RADIUS}px; padding: 5px 8px; }} "
+            "QComboBox:hover, QLineEdit:hover, QListWidget:hover { border-color: #505050; } "
+            "QComboBox::drop-down { border: 0; width: 24px; } "
+            f"QMenu {{ background: #202020; color: white; border: 1px solid #3d3d3d; border-radius: {CONTROL_RADIUS}px; padding: 4px; }} "
+            f"QMenu::item {{ border-radius: {CONTROL_RADIUS - 2}px; padding: 6px 18px; }} "
+            "QMenu::item:selected { background: #303030; }"
         )
 
         central = QWidget()
@@ -337,13 +370,6 @@ class MainWindow(QMainWindow):
         header = QWidget()
         top = QHBoxLayout(header)
         top.setContentsMargins(12, 8, 12, 8)
-
-        title = QLabel("Applications")
-        font = title.font()
-        font.setPointSize(14)
-        font.setBold(True)
-        title.setFont(font)
-        top.addWidget(title)
 
         default_label = QLabel("Default:")
         top.addWidget(default_label)
