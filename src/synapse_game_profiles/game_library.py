@@ -11,6 +11,7 @@ from typing import Callable, Iterable
 
 from .debug_log import get_logger
 from .paths import resources_dir
+from .steam_appinfo import read_app_metadata
 
 try:
     import winreg
@@ -37,6 +38,7 @@ class _Install:
     title: str
     launcher: str
     primary_executable: Path | None = None
+    launch_executables: tuple[Path, ...] = ()
 
 
 _NON_GAME_TITLES = (
@@ -203,6 +205,12 @@ def _command_executable(root: Path, value: str | None) -> Path | None:
     return candidate
 
 
+def _steam_launch_path(root: Path, value: str) -> Path:
+    value = os.path.expandvars(value.strip().strip('"'))
+    candidate = Path(value)
+    return candidate if candidate.is_absolute() else root / candidate
+
+
 def _steam() -> list[_Install]:
     roots: list[Path] = []
     if winreg is not None:
@@ -222,6 +230,9 @@ def _steam() -> list[_Install]:
             libraries.extend(Path(path.replace("\\\\", "\\")) for path in re.findall(r'"path"\s*"([^"]+)"', text, re.I))
         except OSError:
             pass
+
+        manifest_entries: list[tuple[int | None, Path, str]] = []
+        wanted_app_ids: set[int] = set()
         for library in {_safe_resolve(path) for path in libraries if path.is_dir()}:
             steamapps = library / "steamapps"
             try:
@@ -237,8 +248,43 @@ def _steam() -> list[_Install]:
                 if not folder:
                     continue
                 root = steamapps / "common" / folder
-                if root.is_dir():
-                    installs.append(_Install(root, pairs.get("name") or folder, "Steam"))
+                if not root.is_dir():
+                    continue
+                app_id: int | None = None
+                try:
+                    app_id = int(pairs.get("appid", ""))
+                except ValueError:
+                    pass
+                if app_id is not None:
+                    wanted_app_ids.add(app_id)
+                manifest_entries.append((app_id, root, pairs.get("name") or folder))
+
+        metadata = {}
+        appinfo_path = steam_root / "appcache" / "appinfo.vdf"
+        if wanted_app_ids and appinfo_path.is_file():
+            try:
+                metadata = read_app_metadata(appinfo_path, wanted_app_ids)
+                _LOG.info("Steam appinfo metadata loaded for %d/%d installed app(s)", len(metadata), len(wanted_app_ids))
+            except (OSError, ValueError):
+                _LOG.exception("Could not parse Steam appinfo cache; using safe executable heuristics")
+
+        for app_id, root, title in manifest_entries:
+            app_metadata = metadata.get(app_id) if app_id is not None else None
+            if app_metadata and app_metadata.app_type and app_metadata.app_type != "game":
+                _LOG.debug(
+                    "Skipping Steam non-game app %s (%s, appid=%s)",
+                    title,
+                    app_metadata.app_type,
+                    app_id,
+                )
+                continue
+
+            launch_executables: tuple[Path, ...] = ()
+            if app_metadata and app_metadata.launch_executables:
+                launch_executables = tuple(_steam_launch_path(root, item) for item in app_metadata.launch_executables)
+            primary = launch_executables[0] if launch_executables else None
+            installs.append(_Install(root, title, "Steam", primary, launch_executables))
+
     return installs
 
 
@@ -263,7 +309,7 @@ def _epic() -> list[_Install]:
         title = data.get("DisplayName") if isinstance(data.get("DisplayName"), str) else root.name
         launch = data.get("LaunchExecutable")
         primary = root / launch if isinstance(launch, str) and launch else None
-        installs.append(_Install(root, title or root.name, "Epic", primary))
+        installs.append(_Install(root, title or root.name, "Epic", primary, (primary,) if primary else ()))
     return installs
 
 
@@ -283,7 +329,8 @@ def _gog() -> list[_Install]:
                     continue
                 title = _registry_value(hive, key, ("gameName", "GameName", "name", "Name")) or root.name
                 command = _registry_value(hive, key, ("exe", "Exe", "launchCommand", "LaunchCommand", "command", "Command"))
-                installs.append(_Install(root, title, "GOG", _command_executable(root, command)))
+                primary = _command_executable(root, command)
+                installs.append(_Install(root, title, "GOG", primary, (primary,) if primary else ()))
     return installs
 
 
@@ -311,7 +358,7 @@ def _registry_launcher(
                 primary = candidate if candidate.suffix.casefold() == ".exe" else None
                 if primary is None:
                     primary = _command_executable(root, _registry_value(hive, key, executable_names))
-                installs.append(_Install(root, title, launcher, primary))
+                installs.append(_Install(root, title, launcher, primary, (primary,) if primary else ()))
     return installs
 
 
@@ -332,7 +379,8 @@ def _ubisoft() -> list[_Install]:
                     continue
                 title = _registry_value(hive, key, ("DisplayName", "GameName", "Name", "Title")) or root.name or game_id
                 command = _registry_value(hive, key, ("Executable", "Exe", "GameExe", "LaunchExecutable"))
-                installs.append(_Install(root, title, "Ubisoft Connect", _command_executable(root, command)))
+                primary = _command_executable(root, command)
+                installs.append(_Install(root, title, "Ubisoft Connect", primary, (primary,) if primary else ()))
     return installs
 
 
@@ -349,7 +397,8 @@ def _battlenet() -> list[_Install]:
         candidate = Path(location)
         root = candidate.parent if candidate.suffix.casefold() == ".exe" else candidate
         if root.is_dir():
-            installs.append(_Install(root, product, "Battle.net", candidate if candidate.suffix.casefold() == ".exe" else None))
+            primary = candidate if candidate.suffix.casefold() == ".exe" else None
+            installs.append(_Install(root, product, "Battle.net", primary, (primary,) if primary else ()))
     return installs
 
 
@@ -415,7 +464,7 @@ def _xbox() -> list[_Install]:
                             primary = root / name
                 except (OSError, ET.ParseError):
                     pass
-            installs.append(_Install(root, title, "Xbox", primary))
+            installs.append(_Install(root, title, "Xbox", primary, (primary,) if primary else ()))
     return installs
 
 
@@ -519,6 +568,10 @@ def _candidate_score(executable: Path, install: _Install, mappings: list[dict[st
     if any(_mapping_matches(rule, resolved, install.launcher) for rule in mappings):
         score += 2500
 
+    known_launches = {_norm(path) for path in install.launch_executables if path is not None}
+    if _norm(resolved) in known_launches:
+        score += 650 if install.launcher == "Steam" else 400
+
     if install.primary_executable and _norm(resolved) == _norm(install.primary_executable):
         score += {
             "Xbox": 1800,
@@ -527,6 +580,7 @@ def _candidate_score(executable: Path, install: _Install, mappings: list[dict[st
             "Ubisoft Connect": 700,
             "EA": 650,
             "Rockstar": 600,
+            "Steam": 550,
             "Epic": 450,
         }.get(install.launcher, 500)
 
@@ -594,10 +648,13 @@ def _select_game_executable(install: _Install, mappings: list[dict[str, str]]) -
 
     root = _safe_resolve(install.root)
     candidates = list(_exe_files(root))
-    if install.primary_executable and install.primary_executable.is_file():
-        primary_key = _norm(install.primary_executable)
-        if all(_norm(candidate) != primary_key for candidate in candidates):
-            candidates.insert(0, install.primary_executable)
+    candidate_keys = {_norm(candidate) for candidate in candidates}
+    for known in install.launch_executables:
+        if known and known.is_file() and _norm(known) not in candidate_keys:
+            candidates.insert(0, known)
+            candidate_keys.add(_norm(known))
+    if install.primary_executable and install.primary_executable.is_file() and _norm(install.primary_executable) not in candidate_keys:
+        candidates.insert(0, install.primary_executable)
 
     scored: list[tuple[float, Path]] = []
     rejected = 0
@@ -679,11 +736,12 @@ def discover_games(progress: Callable[[str], None] | None = None) -> list[Discov
             _LOG.info("%s -> %d install(s)", name, len(found))
             for install in found:
                 _LOG.debug(
-                    "%s [%s]: root=%s primary=%s",
+                    "%s [%s]: root=%s primary=%s launches=%s",
                     install.title,
                     install.launcher,
                     install.root,
                     install.primary_executable,
+                    install.launch_executables,
                 )
         except (OSError, PermissionError, ValueError):
             _LOG.exception("%s discovery failed", name)
