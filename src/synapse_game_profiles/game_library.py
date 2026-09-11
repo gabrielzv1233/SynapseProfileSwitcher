@@ -8,12 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from .debug_log import get_logger
 from .paths import resources_dir
 
 try:
     import winreg
 except ImportError:
     winreg = None
+
+
+_LOG = get_logger("discovery")
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,9 +350,13 @@ def discover_games(progress: Callable[[str], None] | None = None) -> list[Discov
         if progress:
             progress(f"Scanning {name}...")
         try:
-            installs.extend(provider())
+            found = provider()
+            installs.extend(found)
+            _LOG.info("%s -> %d install(s)", name, len(found))
+            for install in found:
+                _LOG.debug("%s [%s]: %s", install.title, install.launcher, install.root)
         except (OSError, PermissionError, ValueError):
-            continue
+            _LOG.exception("%s discovery failed", name)
 
     mappings = _mappings()
     result: dict[str, DiscoveredExecutable] = {}
@@ -364,9 +372,13 @@ def discover_games(progress: Callable[[str], None] | None = None) -> list[Discov
         executables = list(_exe_files(root))
         if install.primary_executable and install.primary_executable.is_file() and _norm(install.primary_executable) not in {_norm(path) for path in executables}:
             executables.insert(0, install.primary_executable)
+        _LOG.debug("%s [%s]: %s -> %d executable(s)", install.title, install.launcher, root, len(executables))
         for executable in executables:
             resolved = _safe_resolve(executable)
             key = _norm(resolved)
             title = _mapped_title(resolved, install.title, install.launcher, mappings)
             result[key] = DiscoveredExecutable(str(resolved), title, install.launcher, str(root))
-    return sorted(result.values(), key=lambda item: (item.title.casefold(), item.executable.casefold()))
+
+    discovered = sorted(result.values(), key=lambda item: (item.title.casefold(), item.executable.casefold()))
+    _LOG.info("Discovery complete: %d executable(s)", len(discovered))
+    return discovered
