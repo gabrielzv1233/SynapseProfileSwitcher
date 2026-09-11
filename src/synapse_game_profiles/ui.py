@@ -5,7 +5,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QThread, Signal
+from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
@@ -40,8 +41,10 @@ from .storage import Store
 from .window_watcher import ForegroundWatcher
 
 
-TILE_WIDTH = 168
-TILE_HEIGHT = 100
+MIN_COLUMNS = 5
+TARGET_TILE_SIZE = 156
+MIN_TILE_SIZE = 112
+TILE_SPACING = 8
 DEFAULT_WINDOW_WIDTH = 840
 DEFAULT_WINDOW_HEIGHT = 576
 _LOG = get_logger("ui")
@@ -64,7 +67,7 @@ class ScanThread(QThread):
         try:
             _LOG.info("Background scan started explicit=%s", self.explicit)
             self.results = discover_games(self.status.emit)
-            _LOG.info("Background scan finished with %d result(s)", len(self.results))
+            _LOG.info("Background scan finished with %d game(s)", len(self.results))
         except BaseException as error:
             self.error = error
             _LOG.exception("Background scan crashed")
@@ -78,25 +81,31 @@ class Tile(QFrame):
         super().__init__()
         self.record = record
         self.add_tile = add_tile
-        self.setFixedSize(TILE_WIDTH, TILE_HEIGHT)
+        self.setFixedSize(TARGET_TILE_SIZE, TARGET_TILE_SIZE)
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet("QFrame { border: 1px solid #3d3d3d; border-radius: 10px; background: #262626; }")
+        self.setStyleSheet(
+            "QFrame { border: 1px solid #3d3d3d; border-radius: 8px; background: #262626; }"
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
-        label = QLabel("+" if add_tile else record.title)
-        label.setAlignment(Qt.AlignCenter)
-        label.setWordWrap(True)
+        self.label = QLabel("+" if add_tile else record.title)
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setWordWrap(True)
         font = QFont()
         font.setBold(True)
-        font.setPointSize(23 if add_tile else 9)
-        label.setFont(font)
-        label.setStyleSheet("color: white; background: transparent; border: 0;")
-        layout.addWidget(label)
+        font.setPointSize(24 if add_tile else 10)
+        self.label.setFont(font)
+        self.label.setStyleSheet("color: white; background: transparent; border: 0;")
+        layout.addWidget(self.label)
+
+    def set_tile_size(self, size: int) -> None:
+        self.setFixedSize(size, size)
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
             self.activated.emit(self.record)
+        super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if self.add_tile and event.button() == Qt.LeftButton:
@@ -107,28 +116,35 @@ class Tile(QFrame):
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
-        if self.add_tile or not self.record or not self.record.icon_path or not Path(self.record.icon_path).is_file():
+        if self.add_tile or not self.record or not self.record.icon_path:
             return
-        pixmap = QPixmap(self.record.icon_path)
+
+        icon_path = Path(self.record.icon_path)
+        if not icon_path.is_file():
+            return
+
+        pixmap = QPixmap(str(icon_path))
         if pixmap.isNull():
             return
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         scaled = pixmap.scaled(self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-        x = max(0, (scaled.width() - self.width()) // 2)
-        y = max(0, (scaled.height() - self.height()) // 2)
-        source = scaled.rect().adjusted(x, y, -x, -y)
+        source_x = max(0, (scaled.width() - self.width()) // 2)
+        source_y = max(0, (scaled.height() - self.height()) // 2)
+        source = QRect(source_x, source_y, self.width(), self.height())
         painter.drawPixmap(self.rect(), scaled, source)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 125))
         painter.end()
-        for child in self.findChildren(QLabel):
-            child.raise_()
+        self.label.raise_()
 
 
 class FlowLayout(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.items: list[QWidget] = []
+        self.items: list[Tile] = []
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        self.setMinimumWidth(MIN_COLUMNS * MIN_TILE_SIZE + (MIN_COLUMNS - 1) * TILE_SPACING)
 
     def clear(self) -> None:
         for item in self.items:
@@ -136,7 +152,7 @@ class FlowLayout(QWidget):
             item.deleteLater()
         self.items.clear()
 
-    def add(self, widget: QWidget) -> None:
+    def add(self, widget: Tile) -> None:
         widget.setParent(self)
         widget.show()
         self.items.append(widget)
@@ -147,19 +163,19 @@ class FlowLayout(QWidget):
         self._relayout()
 
     def _relayout(self) -> None:
-        margin = 12
-        spacing = 12
-        available = max(TILE_WIDTH, self.width() - margin * 2)
-        columns = max(1, (available + spacing) // (TILE_WIDTH + spacing))
-        grid_width = columns * TILE_WIDTH + max(0, columns - 1) * spacing
-        start_x = max(margin, (self.width() - grid_width) // 2)
+        width = max(1, self.width())
+        columns = max(MIN_COLUMNS, (width + TILE_SPACING) // (TARGET_TILE_SIZE + TILE_SPACING))
+        tile_size = max(1, (width - (columns - 1) * TILE_SPACING) // columns)
 
         for index, item in enumerate(self.items):
             row, column = divmod(index, columns)
-            item.move(start_x + column * (TILE_WIDTH + spacing), margin + row * (TILE_HEIGHT + spacing))
+            item.set_tile_size(tile_size)
+            item.move(column * (tile_size + TILE_SPACING), row * (tile_size + TILE_SPACING))
 
         rows = (len(self.items) + columns - 1) // columns
-        self.setMinimumHeight(margin * 2 + rows * TILE_HEIGHT + max(0, rows - 1) * spacing)
+        height = rows * tile_size + max(0, rows - 1) * TILE_SPACING
+        self.setMinimumHeight(height)
+        self.resize(width, max(height, self.parentWidget().height() if self.parentWidget() else height))
 
 
 class ModifyDialog(QDialog):
@@ -168,12 +184,12 @@ class ModifyDialog(QDialog):
         self.record = record
         self.selected_artwork: str | None = None
         self.setWindowTitle(f"Modify {record.title}")
-        self.resize(520, 310)
+        self.resize(520, 380)
 
         layout = QVBoxLayout(self)
         self.preview = QPushButton()
-        self.preview.setFixedSize(TILE_WIDTH, TILE_HEIGHT)
-        self.preview.setIconSize(QSize(TILE_WIDTH - 8, TILE_HEIGHT - 8))
+        self.preview.setFixedSize(180, 180)
+        self.preview.setIconSize(QSize(172, 172))
         self.preview.clicked.connect(self.choose_artwork)
         self._update_preview(record.icon_path)
         layout.addWidget(self.preview, alignment=Qt.AlignHCenter)
@@ -295,12 +311,22 @@ class MainWindow(QMainWindow):
         self.watcher.start()
 
         self.setWindowTitle("Synapse Game Profiles")
+        self.setMinimumSize(640, 480)
         self._set_default_window_size()
-        self.setStyleSheet("QMainWindow, QDialog { background: #171717; color: white; } QLabel, QCheckBox { color: white; }")
+        self.setStyleSheet(
+            "QMainWindow, QDialog { background: #171717; color: white; } "
+            "QLabel, QCheckBox { color: white; } "
+            "QScrollArea { border: 0; background: #171717; }"
+        )
 
         central = QWidget()
         outer = QVBoxLayout(central)
-        top = QHBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        header = QWidget()
+        top = QHBoxLayout(header)
+        top.setContentsMargins(12, 8, 12, 8)
 
         title = QLabel("Applications")
         font = title.font()
@@ -325,9 +351,10 @@ class MainWindow(QMainWindow):
         settings.clicked.connect(self.open_settings)
         top.addWidget(scan)
         top.addWidget(settings)
-        outer.addLayout(top)
+        outer.addWidget(header)
 
         scroll = QScrollArea()
+        scroll.setFrameShape(QFrame.NoFrame)
         scroll.setWidgetResizable(True)
         self.flow = FlowLayout()
         scroll.setWidget(self.flow)
@@ -393,7 +420,10 @@ class MainWindow(QMainWindow):
         add = Tile(None, True)
         add.activated.connect(lambda _: self.manual_add())
         self.flow.add(add)
-        for record in sorted((item for item in self.apps.values() if not item.removed), key=lambda item: item.title.casefold()):
+        for record in sorted(
+            (item for item in self.apps.values() if not item.removed),
+            key=lambda item: item.title.casefold(),
+        ):
             tile = Tile(record)
             tile.activated.connect(self.launch)
             tile.context_requested.connect(self.context_menu)
@@ -424,33 +454,36 @@ class MainWindow(QMainWindow):
 
         self.scanning = False
         self.scan_thread = None
-        thread.deleteLater()
-
-        if thread.error is not None:
-            self.status.setText("Scan failed")
-            QMessageBox.critical(self, "Scan failed", f"{type(thread.error).__name__}: {thread.error}")
-            return
 
         try:
+            if thread.error is not None:
+                self.status.setText("Scan failed")
+                QMessageBox.critical(self, "Scan failed", f"{type(thread.error).__name__}: {thread.error}")
+                return
             self.apply_discovery(thread.results, explicit=thread.explicit)
         except Exception as error:
             _LOG.exception("Failed while applying discovery results")
             self.status.setText("Failed applying scan")
             QMessageBox.critical(self, "Scan apply failed", f"{type(error).__name__}: {error}")
+        finally:
+            thread.deleteLater()
 
     def apply_discovery(self, discovered: list[DiscoveredExecutable], explicit: bool) -> None:
-        _LOG.info("Applying %d discovery result(s), explicit=%s", len(discovered), explicit)
+        _LOG.info("Applying %d playable game(s), explicit=%s", len(discovered), explicit)
         known_by_path = {_norm(record.executable): record for record in self.apps.values()}
+        discovered_paths = {_norm(item.executable) for item in discovered}
         added = 0
         restored = 0
+        stale_hidden = 0
         icons_repaired = 0
 
         for item in discovered:
             key = _norm(item.executable)
             record = known_by_path.get(key)
             if record:
-                if explicit and record.removed and not record.manually_added:
+                if record.removed and (explicit or not record.removed_by_user):
                     record.removed = False
+                    record.removed_by_user = False
                     restored += 1
 
                 override = self.overrides.get(record.id, {})
@@ -460,12 +493,14 @@ class MainWindow(QMainWindow):
                     record.launcher = item.launcher
                     record.install_root = item.install_root
 
+                custom_icon = bool(override.get("custom_icon", override.get("icon_path")))
                 icon_valid = bool(record.icon_path and Path(record.icon_path).is_file())
-                if not icon_valid:
-                    repaired = cache_executable_icon(record.executable)
+                if not custom_icon and (explicit or not icon_valid):
+                    repaired = cache_executable_icon(record.executable, force=explicit)
                     if repaired:
+                        if record.icon_path != repaired:
+                            icons_repaired += 1
                         record.icon_path = repaired
-                        icons_repaired += 1
                 continue
 
             record = AppRecord(
@@ -480,13 +515,21 @@ class MainWindow(QMainWindow):
             known_by_path[key] = record
             added += 1
 
+        for record in self.apps.values():
+            if record.manually_added or record.removed_by_user:
+                continue
+            if _norm(record.executable) not in discovered_paths and not record.removed:
+                record.removed = True
+                stale_hidden += 1
+
         self.store.save_apps(self.apps)
-        self.status.setText(f"Found {len(discovered)} executable(s)")
+        self.status.setText(f"Found {len(discovered)} game(s)")
         _LOG.info(
-            "Discovery applied: found=%d added=%d restored=%d icons_repaired=%d total_records=%d",
+            "Discovery applied: games=%d added=%d restored=%d stale_hidden=%d icons_repaired=%d total_records=%d",
             len(discovered),
             added,
             restored,
+            stale_hidden,
             icons_repaired,
             len(self.apps),
         )
@@ -499,6 +542,8 @@ class MainWindow(QMainWindow):
         existing = next((item for item in self.apps.values() if _norm(item.executable) == _norm(path)), None)
         if existing:
             existing.removed = False
+            existing.removed_by_user = False
+            existing.manually_added = True
             self.store.save_apps(self.apps)
             self.modify(existing)
             return
@@ -540,26 +585,41 @@ class MainWindow(QMainWindow):
             return
 
         old_executable = record.executable
+        executable_changed = _norm(old_executable) != _norm(executable)
         record.executable = str(Path(executable).resolve())
         record.title = dialog.title_edit.text().strip() or Path(executable).stem
+
+        old_override = self.overrides.get(record.id, {})
+        custom_icon = bool(old_override.get("custom_icon", old_override.get("icon_path")))
+
         if dialog.selected_artwork:
             cached = cache_artwork(dialog.selected_artwork)
             if cached:
                 record.icon_path = cached
-        elif _norm(old_executable) != _norm(record.executable) or not record.icon_path or not Path(record.icon_path).is_file():
-            record.icon_path = cache_executable_icon(record.executable)
+                custom_icon = True
+        elif executable_changed and not custom_icon:
+            record.icon_path = cache_executable_icon(record.executable, force=True)
 
-        self.overrides[record.id] = {
+        if executable_changed:
+            record.manually_added = True
+            record.removed = False
+            record.removed_by_user = False
+
+        override = {
             "title": record.title,
             "executable": record.executable,
-            "icon_path": record.icon_path,
         }
+        if custom_icon and record.icon_path:
+            override["icon_path"] = record.icon_path
+            override["custom_icon"] = True
+        self.overrides[record.id] = override
         self.store.save_overrides(self.overrides)
         self.store.save_apps(self.apps)
         self.refresh_tiles()
 
     def remove(self, record: AppRecord) -> None:
         record.removed = True
+        record.removed_by_user = True
         self.store.save_apps(self.apps)
         self.refresh_tiles()
 
