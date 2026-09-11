@@ -21,8 +21,8 @@ def main() -> None:
     games = discover_games(print)
 
     lines = [
-        "SynapseProfileSwitcher discovery dump",
-        f"Found: {len(games)} executable(s)",
+        "SynapseProfileSwitcher playable-game discovery dump",
+        f"Found: {len(games)} game(s)",
         "",
     ]
 
@@ -42,7 +42,7 @@ def main() -> None:
         )
 
     OUTPUT.write_text("\n".join(lines), encoding="utf-8")
-    print(f"\nWrote {len(games)} entries to: {OUTPUT}")
+    print(f"\nWrote {len(games)} game(s) to: {OUTPUT}")
 
 
 if __name__ == "__main__":
