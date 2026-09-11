@@ -1,0 +1,27 @@
+[
+  {
+    "exe": "hl2.exe",
+    "folder": "Half-Life 2",
+    "title": "Half-Life 2"
+  },
+  {
+    "exe": "hl2.exe",
+    "folder": "Portal",
+    "title": "Portal"
+  },
+  {
+    "exe": "hl2.exe",
+    "folder": "Portal 2",
+    "title": "Portal 2"
+  },
+  {
+    "exe": "hl.exe",
+    "folder": "Half-Life",
+    "title": "Half-Life"
+  },
+  {
+    "exe": "hl.exe",
+    "folder": "Counter-Strike",
+    "title": "Counter-Strike"
+  }
+]
