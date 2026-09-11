@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 
 import psutil
-from PySide6.QtCore import QTimer, Signal, QObject
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from .models import AppRecord
 from .profile_backend import DummyProfileBackend
@@ -16,7 +16,6 @@ if os.name == "nt":
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
     def _foreground_pid() -> int | None:
@@ -27,6 +26,7 @@ if os.name == "nt":
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         return int(pid.value) or None
 else:
+
     def _foreground_pid() -> int | None:
         return None
 
@@ -67,7 +67,11 @@ class ForegroundWatcher(QObject):
         self.settings = self.store.load_settings()
 
     def _match(self, pid: int) -> Match | None:
-        configured = [item for item in self.apps.values() if not item.removed and item.profile_uuid and os.path.isfile(item.executable)]
+        configured = [
+            item
+            for item in self.apps.values()
+            if not item.removed and item.profile_uuid and os.path.isfile(item.executable)
+        ]
         by_path = {_norm(item.executable): item for item in configured}
         try:
             process = psutil.Process(pid)
@@ -99,19 +103,28 @@ class ForegroundWatcher(QObject):
         if self.backend.switch_profile(profile_uuid):
             self.last_switched_uuid = profile_uuid
 
+    def _capture_unassociated_for(self, profile_uuid: str | None) -> None:
+        active = self.backend.get_active_profile_for(profile_uuid)
+        if not active:
+            return
+        if self.settings.get("last_unassociated_profile_uuid") == active:
+            return
+        self.settings["last_unassociated_profile_uuid"] = active
+        self.store.save_settings(self.settings)
+
     def _tick(self) -> None:
         pid = _foreground_pid()
         match = self._match(pid) if pid else None
         if match:
+            # Only capture when entering mapped-app territory from an unassociated
+            # window. Switching directly between mapped games keeps the original
+            # desktop/non-game profile as the eventual restore target.
+            if self.last_match_id is None:
+                self._capture_unassociated_for(match.app.profile_uuid)
             self.last_match_id = match.app.id
             self._switch(match.app.profile_uuid)
             self.changed.emit(match)
             return
-
-        active = self.backend.get_active_profile_uuid()
-        if self.last_match_id is None and active:
-            self.settings["last_unassociated_profile_uuid"] = active
-            self.store.save_settings(self.settings)
 
         target = self.settings.get("default_profile_uuid") or self.settings.get("last_unassociated_profile_uuid")
         if self.last_match_id is not None:
