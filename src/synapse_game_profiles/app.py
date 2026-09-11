@@ -25,12 +25,13 @@ def main() -> None:
         logger.error("Unsupported operating system: %s", os.name)
         raise SystemExit("Synapse Game Profiles currently supports Windows only.")
 
+    window: MainWindow | None = None
+    previous_sigint = signal.getsignal(signal.SIGINT)
+
     try:
         app = QApplication(sys.argv)
         app.setApplicationName("Synapse Game Profiles")
         app.setQuitOnLastWindowClosed(False)
-
-        previous_sigint = signal.getsignal(signal.SIGINT)
 
         def exit_from_console(signum, frame) -> None:
             logger.info("Received Ctrl-C/SIGINT; exiting")
@@ -47,7 +48,6 @@ def main() -> None:
         window = MainWindow()
         window.show()
         exit_code = app.exec()
-        signal.signal(signal.SIGINT, previous_sigint)
         logger.info("Qt event loop exited with code %s", exit_code)
         raise SystemExit(exit_code)
     except SystemExit:
@@ -55,3 +55,12 @@ def main() -> None:
     except BaseException:
         logger.exception("Fatal application startup/runtime error")
         raise
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        if window is not None:
+            try:
+                window.watcher.stop()
+                window.backend.close()
+                logger.info("SynapseCTRL backend closed")
+            except Exception:
+                logger.exception("Failed while closing SynapseCTRL backend")
