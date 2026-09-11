@@ -14,6 +14,7 @@ class AppRecord:
     profile_uuid: str | None = None
     manually_added: bool = False
     removed: bool = False
+    removed_by_user: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -21,4 +22,7 @@ class AppRecord:
     @classmethod
     def from_dict(cls, value: dict) -> "AppRecord":
         fields = cls.__dataclass_fields__
-        return cls(**{key: value[key] for key in fields if key in value})
+        kwargs = {key: value[key] for key in fields if key in value}
+        if value.get("removed") and "removed_by_user" not in value:
+            kwargs["removed_by_user"] = True
+        return cls(**kwargs)
