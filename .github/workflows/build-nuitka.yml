@@ -1,0 +1,43 @@
+name: Build Nuitka EXE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Build with Nuitka
+        shell: pwsh
+        run: .\build_nuitka.ps1
+
+      - name: Write SHA256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "dist\SynapseProfileSwitcher.exe").Hash.ToLowerInvariant()
+          "$hash  SynapseProfileSwitcher.exe" | Set-Content -Encoding ascii "dist\SynapseProfileSwitcher.exe.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SynapseProfileSwitcher-${{ github.run_number }}
+          path: |
+            dist/SynapseProfileSwitcher.exe
+            dist/SynapseProfileSwitcher.exe.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
