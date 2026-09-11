@@ -100,7 +100,8 @@ class Tile(QFrame):
         layout.addWidget(self.label)
 
     def set_tile_size(self, size: int) -> None:
-        self.setFixedSize(size, size)
+        if self.width() != size or self.height() != size:
+            self.setFixedSize(size, size)
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -143,7 +144,8 @@ class FlowLayout(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.items: list[Tile] = []
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        self._relayout_running = False
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.setMinimumWidth(MIN_COLUMNS * MIN_TILE_SIZE + (MIN_COLUMNS - 1) * TILE_SPACING)
 
     def clear(self) -> None:
@@ -151,6 +153,7 @@ class FlowLayout(QWidget):
             item.setParent(None)
             item.deleteLater()
         self.items.clear()
+        self._relayout()
 
     def add(self, widget: Tile) -> None:
         widget.setParent(self)
@@ -163,19 +166,26 @@ class FlowLayout(QWidget):
         self._relayout()
 
     def _relayout(self) -> None:
-        width = max(1, self.width())
-        columns = max(MIN_COLUMNS, (width + TILE_SPACING) // (TARGET_TILE_SIZE + TILE_SPACING))
-        tile_size = max(1, (width - (columns - 1) * TILE_SPACING) // columns)
+        if self._relayout_running:
+            return
 
-        for index, item in enumerate(self.items):
-            row, column = divmod(index, columns)
-            item.set_tile_size(tile_size)
-            item.move(column * (tile_size + TILE_SPACING), row * (tile_size + TILE_SPACING))
+        self._relayout_running = True
+        try:
+            width = max(1, self.width())
+            columns = max(MIN_COLUMNS, (width + TILE_SPACING) // (TARGET_TILE_SIZE + TILE_SPACING))
+            tile_size = max(1, (width - (columns - 1) * TILE_SPACING) // columns)
 
-        rows = (len(self.items) + columns - 1) // columns
-        height = rows * tile_size + max(0, rows - 1) * TILE_SPACING
-        self.setMinimumHeight(height)
-        self.resize(width, max(height, self.parentWidget().height() if self.parentWidget() else height))
+            for index, item in enumerate(self.items):
+                row, column = divmod(index, columns)
+                item.set_tile_size(tile_size)
+                item.move(column * (tile_size + TILE_SPACING), row * (tile_size + TILE_SPACING))
+
+            rows = (len(self.items) + columns - 1) // columns
+            height = rows * tile_size + max(0, rows - 1) * TILE_SPACING
+            if self.minimumHeight() != height:
+                self.setMinimumHeight(height)
+        finally:
+            self._relayout_running = False
 
 
 class ModifyDialog(QDialog):
