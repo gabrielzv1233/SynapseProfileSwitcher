@@ -10,7 +10,7 @@ from PySide6.QtCore import QTimer, qVersion
 from PySide6.QtWidgets import QApplication
 
 from .debug_log import configure_logging
-from .ui import MainWindow
+from .synapse_preflight import ensure_synapsectrl_ready
 
 
 def main() -> None:
@@ -25,7 +25,7 @@ def main() -> None:
         logger.error("Unsupported operating system: %s", os.name)
         raise SystemExit("Synapse Game Profiles currently supports Windows only.")
 
-    window: MainWindow | None = None
+    window = None
     previous_sigint = signal.getsignal(signal.SIGINT)
 
     try:
@@ -44,6 +44,15 @@ def main() -> None:
         signal_timer = QTimer()
         signal_timer.timeout.connect(lambda: None)
         signal_timer.start(200)
+
+        # Do this before importing the UI/profile backend. If SynapseCTRL needs
+        # to be installed or upgraded, the backend must not have already cached
+        # an ImportError from the old environment state.
+        if not ensure_synapsectrl_ready():
+            logger.warning("SynapseCTRL startup prerequisites were not satisfied")
+            raise SystemExit(1)
+
+        from .ui import MainWindow
 
         window = MainWindow()
         window.show()
