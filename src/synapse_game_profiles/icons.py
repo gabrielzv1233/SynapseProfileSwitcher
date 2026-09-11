@@ -6,12 +6,16 @@ import shutil
 from pathlib import Path
 
 from PIL import Image
+from PySide6.QtCore import QFileInfo
 from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QFileIconProvider
 
+from .debug_log import get_logger
 from .paths import data_dir
 
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".ico"}
+_LOG = get_logger("icons")
 
 
 def _destination(source: Path, extension: str = ".png") -> Path:
@@ -36,8 +40,10 @@ def cache_image(source: str | Path) -> str | None:
                 image.convert("RGBA").save(destination)
         else:
             shutil.copy2(source, destination)
+        _LOG.debug("Cached image %s -> %s", source, destination)
         return str(destination)
     except (OSError, ValueError):
+        _LOG.exception("Failed to cache image %s", source)
         return None
 
 
@@ -50,12 +56,16 @@ def cache_executable_icon(executable: str | Path) -> str | None:
         return str(destination)
 
     try:
-        icon = QIcon(str(executable))
+        icon = QFileIconProvider().icon(QFileInfo(str(executable)))
+        if icon.isNull():
+            icon = QIcon(str(executable))
         pixmap = icon.pixmap(512, 512)
         if not pixmap.isNull() and pixmap.save(str(destination), "PNG"):
+            _LOG.debug("Cached executable icon %s -> %s", executable, destination)
             return str(destination)
+        _LOG.warning("Windows did not return an icon for %s", executable)
     except Exception:
-        pass
+        _LOG.exception("Failed to extract executable icon from %s", executable)
     return None
 
 
